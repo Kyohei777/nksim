@@ -850,11 +850,8 @@ def simulate_network(args, strategy_id, ideal_graph, link_evaluation_data=None):
     # --- 3. 後処理 ---
     print("Numba core simulation finished.")
 
-    strategy_name_map = {v: k for k, v in STRATEGY_ID_MAP.items()}
-    strategy_name = strategy_name_map.get(strategy_id, "unknown")
-
-    output_dir_name = f"{args.routing_strategy}_{strategy_name}"
-    output_dir = os.path.join(args.output_base_dir, output_dir_name)
+    # output_dir_name = f"{args.routing_strategy}_{strategy_name}" # Removed this line
+    output_dir = args.output_base_dir # Modified to use output_base_dir directly
     os.makedirs(output_dir, exist_ok=True)
 
     return final_packets_state, final_path_hist, final_broken_links, output_dir
