@@ -12,9 +12,7 @@ run_all_topology_simulations.py
     |
     +-- (1) make_network_for_nwsim.py を呼び出し (ネットワーク生成)
     |
-    +-- (2) run_custom_sweep.py を呼び出し (スイープ実行)
-            |
-            +-- nwsim.py を繰り返し呼び出し (シミュレーション本体)
+    +-- (2) nwsim.py を繰り返し並列実行 (シミュレーション本体)
 
 [実行フロー2: 単一設定で実行]
 run_simulation_python.py
@@ -44,11 +42,51 @@ run_simulation_python.py
 
 ---
 
+### `run_all_topology_simulations.py` (統合実行)
+
+複数のネットワークトポロジを対象に、設計からシミュレーションまでを一括で行う最高レベルのオーケストレーションスクリプトです。
+
+- **役割**: ソースコード内で定義された複数のネットワークトポロジ設定を順番に処理します。各トポロジに対して`make_network_for_nwsim.py`でネットワークを生成し、その後、定義されたパラメータ範囲に基づいて`nwsim.py`のシミュレーションタスクを多数生成し、並列実行します。このスクリプトは、`dijkstra`と`reliable`の両方のルーティング戦略、および複数の待機戦略の組み合わせを自動的にテストします。
+- **受け取るコマンドライン引数**: なし。すべての設定はソースコード内で完結します。
+- **直接編集が必要な設定（ハードコーディング）**:
+    - `TOPOLOGIES_TO_SIMULATE`: 生成とシミュレーションの対象とするネットワークトポロジの種類と、その生成に必要なパラメータを定義した辞書。（例: `"random": {"PROB_EDGE_RANDOM": 0.2}`）
+    - `RATE_SWEEP_VALUES`: `connect_rate`と`disconnect_rate`として試行する値のリスト。
+    - `STRATEGIES_WITH_PARAMS`: 実験対象とする待機戦略と、その戦略が持つパラメータの試行範囲を定義した辞書。
+    - `NUM_PROCESSES`: 並列実行するプロセス数。
+
+#### 出力ディレクトリ構造
+
+シミュレーション結果は、以下の構造で `result_data` ディレクトリ以下に保存されます。
+
+```
+result_data/
+└───{topology_name}_{YYYYMMDD}/
+    └───{routing_strategy_abbr}/
+        ├───log/
+        │   └───l_c{...}_d{...}_{...}.txt
+        └───{strategy_abbr}/
+            └───{param_value}/
+                └───c{c_rate}/
+                    └───s_c{...}_d{...}_{...}.csv
+```
+
+- **`result_data/`**: 全てのシミュレーション結果のルート。
+- **`{topology_name}_{YYYYMMDD}/`**: トポロジー名と実行日。
+- **`{routing_strategy_abbr}/`**: ルーティング戦略の略称 (`dijk` または `reli`)。
+- **`log/`**: 実行ログファイルが格納されます。
+- **`{strategy_abbr}/`**: 待機戦略の略称 (`dynfail`, `fixed` など)。
+- **`{param_value}/`**: 待機戦略のパラメータ。
+- **`c{c_rate}/`**: 接続レート。
+- **`s_...csv`**: サマリーファイル。
+- **`l_...txt`**: ログファイル。
+
+---
+
 ### `run_custom_sweep.py` (パラメータスイープ実行)
 
-`nwsim.py`を繰り返し呼び出し、パラメータの総当たり実験（スイープ）を行う中心的なスクリプトです。
+**注意**: このスクリプトは現在、`run_all_topology_simulations.py` からは使用されていません。`run_simulation_python.py` から呼び出されるか、単体で特定のネットワークに対してスイープを実行する場合に使用します。
 
-- **役割**: 自身が受け取ったネットワーク情報（ノード、エッジファイル等）と、ソースコード内にハードコーディングされたパラメータ範囲を基に、多数の`nwsim.py`プロセスを並列実行します。
+- **役割**: `nwsim.py`を繰り返し呼び出し、パラメータの総当たり実験（スイープ）を行う中心的なスクリプトです。
 - **受け取るコマンドライン引数**:
     - `node_file`: ノード情報が記載されたCSVファイルのパス。
     - `edge_file`: エッジ情報が記載されたCSVファイルのパス。
@@ -56,20 +94,9 @@ run_simulation_python.py
     - `dest_node`: シミュレーションの終点ノードID。
     - `output_dir`: 結果を出力するルートディレクトリ。
 - **直接編集が必要な設定（ハードコーディング）**:
-    - `RATE_SWEEP_VALUES`: `connect_rate`と`disconnect_rate`として試行する値のリスト。(`np.arange`で定義)
-    - `STRATEGIES_WITH_PARAMS`: 実験対象とする待機戦略と、その戦略が持つパラメータ（例: `dynamic_factor`）の試行範囲を定義した辞書。
+    - `RATE_SWEEP_VALUES`: `connect_rate`と`disconnect_rate`として試行する値のリスト。
+    - `STRATEGIES_WITH_PARAMS`: 実験対象とする待機戦略と、その戦略が持つパラメータの試行範囲を定義した辞書。
     - `NUM_PROCESSES`: 並列実行するプロセス数。
-
----
-
-### `run_all_topology_simulations.py` (統合実行)
-
-複数のネットワークトポロジを対象に、設計からシミュレーションまでを一括で行う最高レベルのオーケストレーションスクリプトです。
-
-- **役割**: ソースコード内で定義された複数のネットワークトポロジ設定を順番に処理します。各トポロジに対して`make_network_for_nwsim.py`でネットワークを生成し、その後`run_custom_sweep.py`を呼び出してパラメータスイープを実行します。
-- **受け取るコマンドライン引数**: なし。すべての設定はソースコード内で完結します。
-- **直接編集が必要な設定（ハードコーディング）**:
-    - `TOPOLOGIES_TO_SIMULATE`: 生成とシミュレーションの対象とするネットワークトポロジの種類と、その生成に必要なパラメータを定義した辞書。（例: `"random": {"PROB_EDGE_RANDOM": 0.2}`）
 
 ---
 
