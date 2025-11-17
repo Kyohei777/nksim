@@ -44,6 +44,8 @@ E_STATE_IS_CONNECTED = 0
 E_STATE_NEXT_EVENT_TIME = 1
 E_STATE_TRANSMITTING_UNTIL = 2
 E_STATE_WEIGHT = 3
+E_STATE_CONNECT_RATE = 4
+E_STATE_DISCONNECT_RATE = 5
 STRATEGY_ID_FIXED = 0
 STRATEGY_ID_NOWAIT = 1
 STRATEGY_ID_DYNAMIC_FAIL = 2
@@ -233,8 +235,6 @@ def _simulation_core_numba(
     edge_to_idx_map,
     max_sim_time,
     ttl,
-    connect_rate,
-    disconnect_rate,
     strategy_id,
     base_wait_time,
     dynamic_factor,
@@ -290,7 +290,7 @@ def _simulation_core_numba(
                 edges_state[eid, E_STATE_IS_CONNECTED] = (
                     1.0 if is_connected_after else 0.0
                 )
-                rate = disconnect_rate if is_connected_after else connect_rate
+                rate = edges_state[eid, E_STATE_DISCONNECT_RATE] if is_connected_after else edges_state[eid, E_STATE_CONNECT_RATE]
                 interval = LOG_1_minus_random() / rate
                 edges_state[eid, E_STATE_NEXT_EVENT_TIME] = current_time + interval
 
@@ -514,8 +514,9 @@ class Packet:
 class Edge:
     def __init__(self, s, t, w, n, it, cr, dr):
         self.source, self.target, self.weight, self.name = s, t, w, n
+        self.connect_rate, self.disconnect_rate = cr, dr
         self.is_connected, self.next_event_time = True, 0
-        self.initialize(it, cr, dr)
+        self.initialize(it, self.connect_rate, self.disconnect_rate)
 
     def initialize(self, ct, cr, dr):
         global LINK_STATE_RNG_LEGACY
@@ -547,7 +548,8 @@ class Graph:
     def make_graph(self):
         nodes = []
         with open(self.node_file_name, "r", newline="") as f:
-            for row in csv.DictReader(f):
+            reader = csv.DictReader(f)
+            for row in reader:
                 node_id = int(row["node_id"])
                 self.G.add_node(node_id, label=row["label"])
                 nodes.append(node_id)
@@ -560,20 +562,29 @@ class Graph:
             self.node_buffers[self.src_node_id] = np.iinfo(np.int64).max
 
         with open(self.edge_file_name, "r", newline="") as f:
+            reader = csv.DictReader(f)
+            # Check for individual rate columns
+            has_individual_rates = ('connect_rate' in reader.fieldnames and 
+                                    'disconnect_rate' in reader.fieldnames)
+            
             processed_pairs = set()
             edge_idx_counter = 0
-            for row in csv.DictReader(f):
+            for row in reader:
                 s, t = int(row["source"]), int(row["target"])
                 pair = tuple(sorted((s, t)))
                 if pair not in processed_pairs:
+                    
+                    cr = float(row["connect_rate"]) if has_individual_rates else self.connect_rate
+                    dr = float(row["disconnect_rate"]) if has_individual_rates else self.disconnect_rate
+
                     edge = Edge(
                         s,
                         t,
                         float(row["weight"]),
                         row["name"],
                         0,
-                        self.connect_rate,
-                        self.disconnect_rate,
+                        cr,
+                        dr,
                     )
                     self.unique_edges_list.append(edge)
                     self.G.add_edge(s, t, weight=float(row["weight"]), name=row["name"])
@@ -711,15 +722,22 @@ def run_link_evaluation_phase(args):
     with open(args.node_file, "r", newline="") as f:
         for row in csv.DictReader(f):
             eval_graph_obj.add_node(int(row["node_id"]), label=row["label"])
+            
     with open(args.edge_file, "r", newline="") as f:
+        reader = csv.DictReader(f)
+        has_individual_rates = ('connect_rate' in reader.fieldnames and 
+                                'disconnect_rate' in reader.fieldnames)
         processed_pairs = set()
-        for row in csv.DictReader(f):
+        for row in reader:
             s, t = int(row["source"]), int(row["target"])
             pair = tuple(sorted((s, t)))
             if pair not in processed_pairs:
+                cr = float(row["connect_rate"]) if has_individual_rates else args.connect_rate
+                dr = float(row["disconnect_rate"]) if has_individual_rates else args.disconnect_rate
+                
                 eval_graph_obj.add_edge(s, t, weight=float(row["weight"]))
                 edge_list_for_eval.append(
-                    {"pair": pair, "weight": float(row["weight"])}
+                    {"pair": pair, "weight": float(row["weight"]), "connect_rate": cr, "disconnect_rate": dr}
                 )
                 processed_pairs.add(pair)
 
@@ -734,7 +752,8 @@ def run_link_evaluation_phase(args):
     for i in range(num_edges):
         is_connected = LINK_STATE_RNG_LEGACY.choice([True, False])
         link_states[i, 0] = 1.0 if is_connected else 0.0
-        rate = args.disconnect_rate if is_connected else args.connect_rate
+        edge_info = edge_list_for_eval[i]
+        rate = edge_info["disconnect_rate"] if is_connected else edge_info["connect_rate"]
         link_states[i, 1] = LINK_STATE_RNG_LEGACY.expovariate(rate)
 
     time_step = 0.1
@@ -743,7 +762,8 @@ def run_link_evaluation_phase(args):
             if t >= link_states[i, 1]:
                 is_connected_after = not (link_states[i, 0] == 1.0)
                 link_states[i, 0] = 1.0 if is_connected_after else 0.0
-                rate = args.disconnect_rate if is_connected_after else args.connect_rate
+                edge_info = edge_list_for_eval[i]
+                rate = edge_info["disconnect_rate"] if is_connected_after else edge_info["connect_rate"]
                 interval = LINK_STATE_RNG_LEGACY.expovariate(rate)
                 link_states[i, 1] = t + interval
 
@@ -812,11 +832,14 @@ def simulate_network(args, strategy_id, ideal_graph, link_evaluation_data=None):
         (num_packets, MAX_BROKEN_LINKS, 2), -1, dtype=np.int64
     )
 
-    edges_state = np.zeros((len(graph.unique_edges_list), 4), dtype=np.float64)
+    edges_state = np.zeros((len(graph.unique_edges_list), 6), dtype=np.float64)
     for idx, edge_obj in enumerate(graph.unique_edges_list):
         edges_state[idx, E_STATE_IS_CONNECTED] = 1.0 if edge_obj.is_connected else 0.0
         edges_state[idx, E_STATE_NEXT_EVENT_TIME] = edge_obj.next_event_time
         edges_state[idx, E_STATE_WEIGHT] = edge_obj.weight
+        edges_state[idx, E_STATE_CONNECT_RATE] = edge_obj.connect_rate
+        edges_state[idx, E_STATE_DISCONNECT_RATE] = edge_obj.disconnect_rate
+
 
     node_buffer_counts = np.zeros_like(graph.node_buffers, dtype=np.int64)
     routing_strategy_id = 1 if args.routing_strategy == "reliable" else 0
@@ -837,8 +860,6 @@ def simulate_network(args, strategy_id, ideal_graph, link_evaluation_data=None):
         graph.edge_to_idx_map_for_numba,
         args.max_sim_time,
         args.ttl,
-        args.connect_rate,
-        args.disconnect_rate,
         strategy_id,
         args.base_wait_time,
         args.dynamic_factor,
@@ -1007,10 +1028,10 @@ if __name__ == "__main__":
         help="Time To Live for packets in seconds.",
     )
     sim_group.add_argument(
-        "--connect_rate", type=float, default=0.4, help="Link connect rate."
+        "--connect_rate", type=float, default=0.4, help="Default link connect rate (used if not in edge file)."
     )
     sim_group.add_argument(
-        "--disconnect_rate", type=float, default=0.2, help="Link disconnect rate."
+        "--disconnect_rate", type=float, default=0.2, help="Default link disconnect rate (used if not in edge file)."
     )
     sim_group.add_argument(
         "--link_seed", type=int, default=12345, help="RNG seed for link state."
