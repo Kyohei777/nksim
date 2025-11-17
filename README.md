@@ -59,13 +59,31 @@
 
 ### 2. 既存グラフでのスイープ実行 (`run_sweep.py`)
 
-ご自身で用意したグラフファイルに対して、全パラメータスイープを実行する場合に使用します。
+ご自身で用意した、あるいは過去に生成した特定のグラフファイルに対して、定義された全パラメータのスイープ（総当たり実験）を並列実行する場合に使用します。
+
+**グラフファイルの配置:**
+グラフファイル（`node.csv` と `edge.csv`）は、プロジェクト内のどこに置いても構いません。実行時に、コマンドライン引数でそのファイルの**絶対パス**または**相対パス**を指定します。
 
 **コマンド例:**
 
 ```bash
-python run_sweep.py --node_file path/to/your/node.csv --edge_file path/to/your/edge.csv --output_base_dir my_sweep_result
+# 例1: プロジェクト内のサブディレクトリに置いた場合 (相対パス)
+# (例: nksim/my_graph_data/my_nodes.csv)
+python run_sweep.py --node_file my_graph_data/my_nodes.csv --edge_file my_graph_data/my_edges.csv --output_base_dir my_custom_graph_result
+
+# 例2: 絶対パスで指定する場合 (Windowsの例)
+python run_sweep.py --node_file C:\Users\YourUser\Desktop\my_graphs\nodes.csv --edge_file C:\Users\YourUser\Desktop\my_graphs\edges.csv --output_base_dir my_desktop_result
+
+# 例3: 絶対パスで指定する場合 (Linux/macOSの例)
+python run_sweep.py --node_file /home/youruser/my_graphs/nodes.csv --edge_file /home/youruser/my_graphs/edges.csv --output_base_dir /home/youruser/my_results
 ```
+
+**引数の説明:**
+
+*   `--node_file`: （必須）ご自身で用意したノードファイルのパス。
+*   `--edge_file`: （必須）ご自身で用意したエッジファイルのパス。
+*   `--output_base_dir`: （任意）シミュレーション結果を保存するディレクトリ名。指定しない場合は `sweep_result` という名前のディレクトリが作成され、その中に結果が保存されます。
+
 
 ### 3. グラフの生成 (`make_network_for_nwsim.py`)
 
