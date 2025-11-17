@@ -138,6 +138,10 @@ def generate_sample_input_files(
     num_hubs=3,
     connect_hubs_complete=True,
     barabasi_m=2,
+    min_connect_rate=0.4,
+    max_connect_rate=0.4,
+    min_disconnect_rate=0.2,
+    max_disconnect_rate=0.2,
 ):
     print(f"Generating sample input files for {num_nodes} nodes...")
     print(f"Topology type: {topology_type}")
@@ -355,11 +359,14 @@ def generate_sample_input_files(
         else:
             name = f"L{u}-{v}"
 
+        connect_rate = round(random.uniform(min_connect_rate, max_connect_rate), 4)
+        disconnect_rate = round(random.uniform(min_disconnect_rate, max_disconnect_rate), 4)
+
         edges_data.append(
-            {"source": u, "target": v, "weight": weight, "name": name}
+            {"source": u, "target": v, "weight": weight, "name": name, "connect_rate": connect_rate, "disconnect_rate": disconnect_rate}
         )
     with open(edge_output_path, "w", newline="") as ef:
-        fieldnames = ["source", "target", "weight", "name"]
+        fieldnames = ["source", "target", "weight", "name", "connect_rate", "disconnect_rate"]
         writer = csv.DictWriter(ef, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(edges_data)
@@ -468,6 +475,13 @@ if __name__ == "__main__":
     parser.add_argument("--k_neighbors", type=int, default=3, help="Number of neighbors for k-nearest neighbor graphs.")
     parser.add_argument("--connection_radius", type=float, default=0.15, help="Connection radius for random geometric graphs.")
     parser.add_argument("--barabasi_m", type=int, default=2, help="Number of edges to attach from a new node to existing nodes for Barabasi-Albert model.")
+    
+    # New arguments for individual link rates
+    parser.add_argument("--min_connect_rate", type=float, default=0.4, help="Minimum connect rate for a link.")
+    parser.add_argument("--max_connect_rate", type=float, default=0.4, help="Maximum connect rate for a link.")
+    parser.add_argument("--min_disconnect_rate", type=float, default=0.2, help="Minimum disconnect rate for a link.")
+    parser.add_argument("--max_disconnect_rate", type=float, default=0.2, help="Maximum disconnect rate for a link.")
+
     args = parser.parse_args()
 
     print(f"\n--- Generating Graph for Topology: {args.topology_type} ---")
@@ -485,6 +499,10 @@ if __name__ == "__main__":
         k_neighbors=args.k_neighbors,
         connection_radius=args.connection_radius,
         barabasi_m=args.barabasi_m,
+        min_connect_rate=args.min_connect_rate,
+        max_connect_rate=args.max_connect_rate,
+        min_disconnect_rate=args.min_disconnect_rate,
+        max_disconnect_rate=args.max_disconnect_rate,
     )
 
     # The rest of the script (diameter calculation, etc.) remains the same...
