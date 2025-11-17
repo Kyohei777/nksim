@@ -2,124 +2,115 @@
 
 このプロジェクトは、様々なネットワークトポロジ上でデータ伝播やその他のプロセスをシミュレートするためのツール群です。
 
-## スクリプトの実行関係
+## スクリプトの役割
 
-各スクリプトは以下の階層関係で実行されます。
+このプロジェクトは、責務の異なる4つの主要なPythonスクリプトで構成されています。
 
-```
-[実行フロー1: 全トポロジで実行]
-run_all_topology_simulations.py
-    |
-    +-- (1) make_network_for_nwsim.py を呼び出し (ネットワーク生成)
-    |
-    +-- (2) nwsim.py を繰り返し並列実行 (シミュレーション本体)
+| スクリプト | 役割 |
+| :--- | :--- |
+| `nwsim.py` | **コア・シミュレータ。** 単一のパラメータ設定でシミュレーションを実行します。 |
+| `make_network_for_nwsim.py` | **グラフ生成スクリプト。** シミュレーションに使用するグラフファイル (`node.csv`, `edge.csv`) を生成します。 |
+| `run_sweep.py` | **単一グラフ用スイープ実行スクリプト。** 既存のグラフファイルに対し、定義された全戦略のパラメータスイープを並列実行します。 |
+| `run_experiment.py` | **大規模自動実験スクリプト。** グラフ生成からパラメータスイープまで、一連の実験全体を自動で実行する最上位のスクリプトです。 |
 
-[実行フロー2: 単一設定で実行]
-run_simulation_python.py
-    |
-    +-- run_custom_sweep.py をインポートして利用
-            |
-            +-- nwsim.py を繰り返し呼び出し (シミュレーション本体)
-```
+## 主な機能と変更点
 
----
+- **リンクごとのパラメータ設定**
+  - `edge.csv` ファイルに `connect_rate` と `disconnect_rate` の列を追加することで、リンク（エッジ）ごとに個別の接続・切断率を設定できるようになりました。
+  - `make_network_for_nwsim.py` は、これらの値をランダムに割り当ててグラフを生成できます。
+  - `nwsim.py` は、`edge.csv` に個別レートの定義がない場合、コマンドライン引数で与えられたグローバル設定値をデフォルトとして使用します（下位互換性）。
 
-## スクリプト詳細
+- **実験の完全自動化 (`run_experiment.py`)**
+  - `run_experiment.py` を実行するだけで、グラフ生成から大規模なパラメータスイープまでを単一のコマンドで実行できます。
+  - `--num_graphs` で生成数を、`--topology_type` でトポロジを指定（または全トポロジを対象に）できます。
+  - `make_network_for_nwsim.py` の引数（例: `--num_nodes`）をそのまま渡すことで、生成されるグラフの特性も制御可能です。
 
-### `nwsim.py` (コアエンジン)
+- **単一グラフでのスイープ実行 (`run_sweep.py`)**
+  - ご自身で用意した、あるいは過去に生成した特定のグラフファイルに対して、全パラメータのスイープ（総当たり実験）を実行できます。
 
-シミュレーションを実行するコアプログラムです。多数のコマンドライン引数を受け取り、振る舞いを細かく制御できます。
-
-- **役割**: コマンドライン引数で与えられた設定に基づき、単一のシミュレーションを実行し、結果を指定されたCSVファイルに出力します。
-- **主なコマンドライン引数**:
-    - **ファイルパス**: `--node_file`, `--edge_file`, `--output_base_dir`, `--summary_filename`
-    - **シミュレーション基本設定**: `--packets`, `--lambda_rate` (パケット生成レート), `--max_sim_time`, `--buffer_size`, `--ttl` (生存時間)
-    - **リンク変動設定**: `--connect_rate`, `--disconnect_rate`, `--link_seed` (乱数シード)
-    - **ルーティング戦略**: `--routing_strategy` (`dijkstra` または `reliable`)
-    - **待機戦略**: `--strategy` (`fixed_wait_duration_strategy`, `no_wait_strategy` など)
-    - **各戦略のパラメータ**: `--base_wait_time`, `--dynamic_factor`, `--ratio_factor`
-    - **その他**: `--src_node`, `--dst_node`, `--debug_packet_ids` など多数。
+- **並列処理による高速化**
+  - `run_experiment.py` と `run_sweep.py` は、内部で複数のシミュレーションを並列で実行します。
+  - スクリプト上部の `MAX_WORKERS` 変数を調整することで、並列度（使用するCPUコア数）を変更できます。
 
 ---
 
-### `run_all_topology_simulations.py` (統合実行)
+## 使い方
 
-複数のネットワークトポロジを対象に、設計からシミュレーションまでを一括で行う最高レベルのオーケストレーションスクリプトです。
+### 1. 大規模な自動実験 (`run_experiment.py`)
 
-- **役割**: ソースコード内で定義された複数のネットワークトポロジ設定を順番に処理します。各トポロジに対して`make_network_for_nwsim.py`でネットワークを生成し、その後、定義されたパラメータ範囲に基づいて`nwsim.py`のシミュレーションタスクを多数生成し、並列実行します。このスクリプトは、`dijkstra`と`reliable`の両方のルーティング戦略、および複数の待機戦略の組み合わせを自動的にテストします。
-- **受け取るコマンドライン引数**: なし。すべての設定はソースコード内で完結します。
-- **直接編集が必要な設定（ハードコーディング）**:
-    - `TOPOLOGIES_TO_SIMULATE`: 生成とシミュレーションの対象とするネットワークトポロジの種類と、その生成に必要なパラメータを定義した辞書。（例: `"random": {"PROB_EDGE_RANDOM": 0.2}`）
-    - `RATE_SWEEP_VALUES`: `connect_rate`と`disconnect_rate`として試行する値のリスト。
-    - `STRATEGIES_WITH_PARAMS`: 実験対象とする待機戦略と、その戦略が持つパラメータの試行範囲を定義した辞書。
-    - `NUM_PROCESSES`: 並列実行するプロセス数。
+グラフ生成からパラメータスイープまでを完全に自動化する場合に使用します。
 
-#### 出力ディレクトリ構造
+**コマンド例:**
 
-シミュレーション結果は、以下の構造で `result_data` ディレクトリ以下に保存されます。
+- **全トポロジについて、それぞれ2個ずつグラフを生成して実験**
+  ```bash
+  python run_experiment.py --num_graphs 2
+  ```
 
-```
-result_data/
-└───{topology_name}_{YYYYMMDD}/
-    └───{routing_strategy_abbr}/
-        ├───log/
-        │   └───l_c{...}_d{...}_{...}.txt
-        └───{strategy_abbr}/
-            └───{param_value}/
-                └───c{c_rate}/
-                    └───s_c{...}_d{...}_{...}.csv
+- **`grid` トポロジに限定し、5個のグラフを生成して実験**
+  ```bash
+  python run_experiment.py --num_graphs 5 --topology_type grid
+  ```
+
+- **グラフ生成のパラメータも指定**
+  ```bash
+  python run_experiment.py --num_graphs 5 --topology_type barabasi_albert --num_nodes 200 --barabasi_m 3
+  ```
+
+### 2. 既存グラフでのスイープ実行 (`run_sweep.py`)
+
+ご自身で用意したグラフファイルに対して、全パラメータスイープを実行する場合に使用します。
+
+**コマンド例:**
+
+```bash
+python run_sweep.py --node_file path/to/your/node.csv --edge_file path/to/your/edge.csv --output_base_dir my_sweep_result
 ```
 
-- **`result_data/`**: 全てのシミュレーション結果のルート。
-- **`{topology_name}_{YYYYMMDD}/`**: トポロジー名と実行日。
-- **`{routing_strategy_abbr}/`**: ルーティング戦略の略称 (`dijk` または `reli`)。
-- **`log/`**: 実行ログファイルが格納されます。
-- **`{strategy_abbr}/`**: 待機戦略の略称 (`dynfail`, `fixed` など)。
-- **`{param_value}/`**: 待機戦略のパラメータ。
-- **`c{c_rate}/`**: 接続レート。
-- **`s_...csv`**: サマリーファイル。
-- **`l_...txt`**: ログファイル。
+### 3. グラフの生成 (`make_network_for_nwsim.py`)
+
+シミュレーションに使うグラフファイルを手動で生成する場合に使用します。
+
+**コマンド例:**
+
+```bash
+python make_network_for_nwsim.py --num_nodes 50 --topology_type grid --node_output_path my_node.csv --edge_output_path my_edge.csv
+```
+
+### 4. 単一シミュレーションの実行 (`nwsim.py`)
+
+特定のパラメータで1回だけシミュレーションを実行する場合に使用します。
+
+**コマンド例:**
+
+```bash
+python nwsim.py --node_file node.csv --edge_file edge.csv --strategy fixed_wait_duration_strategy --routing_strategy dijkstra
+```
 
 ---
 
-### `run_custom_sweep.py` (パラメータスイープ実行)
+## 出力ディレクトリ構造
 
-**注意**: このスクリプトは現在、`run_all_topology_simulations.py` からは使用されていません。`run_simulation_python.py` から呼び出されるか、単体で特定のネットワークに対してスイープを実行する場合に使用します。
+`run_experiment.py` を実行すると、結果は `graph/` と `result/` の2つのトップレベルディレクトリに保存されます。
 
-- **役割**: `nwsim.py`を繰り返し呼び出し、パラメータの総当たり実験（スイープ）を行う中心的なスクリプトです。
-- **受け取るコマンドライン引数**:
-    - `node_file`: ノード情報が記載されたCSVファイルのパス。
-    - `edge_file`: エッジ情報が記載されたCSVファイルのパス。
-    - `source_node`: シミュレーションの始点ノードID。
-    - `dest_node`: シミュレーションの終点ノードID。
-    - `output_dir`: 結果を出力するルートディレクトリ。
-- **直接編集が必要な設定（ハードコーディング）**:
-    - `RATE_SWEEP_VALUES`: `connect_rate`と`disconnect_rate`として試行する値のリスト。
-    - `STRATEGIES_WITH_PARAMS`: 実験対象とする待機戦略と、その戦略が持つパラメータの試行範囲を定義した辞書。
-    - `NUM_PROCESSES`: 並列実行するプロセス数。
-
----
-
-### `make_network_for_nwsim.py` (ネットワーク生成)
-
-シミュレーションに使用するネットワークを定義したCSVファイルを生成します。
-
-- **役割**: コマンドライン引数で指定されたトポロジの種類やノード数に基づき、`node.csv`と`edge.csv`を生成します。
-- **主なコマンドライン引数**:
-    - `--topology_type`: `random`, `grid`, `barabasi_albert` などのトポロジ種別。
-    - `--num_nodes`: 生成するノード数。
-    - `--node_output_path`, `--edge_output_path`: 出力ファイルパス。
-    - **トポロジごとの引数**: `--probability_of_edge` (random用), `--barabasi_m` (barabasi_albert用) など。
-
----
-
-### `run_simulation_python.py` (単一実行ラッパー)
-
-特定のネットワークファイルに対して、`run_custom_sweep.py`で定義されたパラメータスイープを実行するための簡単なラッパーです。
-
-- **役割**: ソースコード内で指定されたCSVファイル（ノード、エッジ、始点・終点）を読み込み、その情報を`run_custom_sweep.py`の`main`関数に渡して実行します。
-- **受け取るコマンドライン引数**: なし。
-- **直接編集が必要な設定（ハードコーディング）**:
-    - `NODE_FILE`: 使用するノードファイルのパス。
-    - `EDGE_FILE`: 使用するエッジファイルのパス。
-    - `ENDPOINTS_FILE`: 始点・終点ノードが書かれたファイルのパス。
+```
+.
+├── graph/  <-- 生成されたすべてのグラフデータ
+│   └── {topology_type}/
+│       ├── graph_0/
+│       │   ├── node.csv
+│       │   └── edge.csv
+│       └── graph_1/
+│           └── ...
+│
+└── result/ <-- すべてのシミュレーション結果
+    └── {topology_type}/
+        └── graph_{index}/
+            ├── dijk/  <-- ルーティング戦略ごとのディレクトリ
+            │   ├── fixed_wait/  <-- 待機戦略ごとのディレクトリ
+            │   │   ├── summary_dijk_fixed_p0.5.csv  <-- パラメータ値を含むファイル名
+            │   │   └── ...
+            │   └── ...
+            └── reli/
+                └── ...
+```
