@@ -7,16 +7,18 @@ import itertools
 import concurrent.futures
 import numpy as np
 
+import random
+
 # --- グローバル設定 ---
 # 並列実行するプロセス数 (NoneにするとCPUのコア数が自動的に使われます)
 MAX_WORKERS = 4 
 
 # シミュレーションの基本パラメータ (nwsim.py に渡すもの)
 SIMULATION_BASE_PARAMS = {
-    "packets": "1000",
-    "max_sim_time": "100.0",
-    "ttl": "50.0",
-    "buffer_size": "10"
+    "packets": "2000",
+    "max_sim_time": "inf",
+    "ttl": "100",
+    "buffer_size": "-1"
 }
 
 # ルーティング戦略の定義
@@ -67,6 +69,8 @@ def run_single_simulation_task(task_info):
     summary_filename = task_info["summary_filename"]
     task_id = task_info["task_id"]
     total_tasks = task_info["total_tasks"]
+    link_seed = task_info["link_seed"]
+    packet_seed = task_info["packet_seed"]
 
     start_time = time.time()
     
@@ -83,7 +87,9 @@ def run_single_simulation_task(task_info):
         "--routing_strategy", routing,
         "--strategy", wait,
         "--output_base_dir", output_dir,
-        "--summary_filename", summary_filename
+        "--summary_filename", summary_filename,
+        "--link_seed", str(link_seed),
+        "--packet_seed", str(packet_seed)
     ]
 
     # 待機戦略のパラメータを追加
@@ -120,6 +126,7 @@ def main():
     parser.add_argument("--node_file", type=str, required=True, help="Path to the node CSV file.")
     parser.add_argument("--edge_file", type=str, required=True, help="Path to the edge CSV file.")
     parser.add_argument("--output_base_dir", type=str, default="sweep_result", help="Directory to save simulation results.")
+    parser.add_argument("--num_runs", type=int, default=5, help="Number of simulation runs with different seeds.")
     args = parser.parse_args()
 
     # --- 入力ファイルの存在確認 ---
@@ -129,99 +136,116 @@ def main():
         print(f"  Edge file: {args.edge_file}")
         sys.exit(1)
 
-    # --- タスクの集約 ---
-    print("Aggregating simulation tasks...")
-    all_simulation_tasks = []
-    task_counter = 0
+    for i in range(args.num_runs):
+        run_num = i + 1
+        print("\n" + "=" * 80)
+        print(f"Starting Simulation Run {run_num}/{args.num_runs}")
+        print("=" * 80)
 
-    for routing in ROUTING_STRATEGIES:
-        routing_abbr = ROUTING_STRATEGY_ABBREVIATIONS[routing]
-        
-        for wait_strategy_name, (param_type, param_values) in STRATEGIES_WITH_PARAMS.items():
-            wait_abbr = STRATEGY_ABBREVIATIONS[wait_strategy_name]
+        run_output_dir = os.path.join(args.output_base_dir, f"run_{run_num}")
+        link_seed = random.randint(0, 99999)
+        packet_seed = random.randint(0, 99999)
+        print(f"  Seeds for this run: link_seed={link_seed}, packet_seed={packet_seed}")
 
-            for param_value in param_values:
-                # 結果保存ディレクトリのパスを組み立て
-                result_output_dir = os.path.join(
-                    args.output_base_dir,
-                    routing_abbr,
-                    wait_abbr
-                )
-                os.makedirs(result_output_dir, exist_ok=True)
 
-                # サマリーファイル名を組み立て (パラメータ値を含む)
-                param_str = f"_p{param_value:.1f}" if param_type else ""
-                summary_filename = f"summary_{routing_abbr}_{wait_abbr}{param_str}.csv"
+        # --- タスクの集約 ---
+        print("Aggregating simulation tasks...")
+        all_simulation_tasks = []
+        task_counter = 0
 
-                task_counter += 1
-                all_simulation_tasks.append({
-                    "routing": routing,
-                    "wait": wait_strategy_name,
-                    "param_type": param_type,
-                    "param_value": param_value,
-                    "node_file": args.node_file,
-                    "edge_file": args.edge_file,
-                    "output_dir": result_output_dir,
-                    "summary_filename": summary_filename,
-                    "task_id": task_counter,
-                    "total_tasks": None # 後で設定
-                })
+        for routing in ROUTING_STRATEGIES:
+            routing_abbr = ROUTING_STRATEGY_ABBREVIATIONS[routing]
+            
+            for wait_strategy_name, (param_type, param_values) in STRATEGIES_WITH_PARAMS.items():
+                wait_abbr = STRATEGY_ABBREVIATIONS[wait_strategy_name]
 
-    if not all_simulation_tasks:
-        print("No simulation tasks were generated. Exiting.")
-        sys.exit(0)
+                for param_value in param_values:
+                    # 結果保存ディレクトリのパスを組み立て
+                    result_output_dir = os.path.join(
+                        run_output_dir,
+                        routing_abbr,
+                        wait_abbr
+                    )
+                    os.makedirs(result_output_dir, exist_ok=True)
 
-    # total_tasks を設定
-    for task in all_simulation_tasks:
-        task["total_tasks"] = len(all_simulation_tasks)
+                    # サマリーファイル名を組み立て (パラメータ値を含む)
+                    param_str = f"_p{param_value:.1f}" if param_type else ""
+                    summary_filename = f"summary_{routing_abbr}_{wait_abbr}{param_str}.csv"
 
-    print(f"Aggregated a total of {len(all_simulation_tasks)} simulation tasks.")
+                    task_counter += 1
+                    all_simulation_tasks.append({
+                        "routing": routing,
+                        "wait": wait_strategy_name,
+                        "param_type": param_type,
+                        "param_value": param_value,
+                        "node_file": args.node_file,
+                        "edge_file": args.edge_file,
+                        "output_dir": result_output_dir,
+                        "summary_filename": summary_filename,
+                        "task_id": task_counter,
+                        "total_tasks": None, # 後で設定
+                        "link_seed": link_seed,
+                        "packet_seed": packet_seed
+                    })
 
-    # --- シミュレーションタスクの並列実行 ---
-    print("\n" + "=" * 80)
-    print("Running All Simulation Tasks in Parallel")
-    print("=" * 80)
+        if not all_simulation_tasks:
+            print("No simulation tasks were generated for this run. Skipping.")
+            continue
 
-    workers = MAX_WORKERS if MAX_WORKERS is not None else os.cpu_count()
-    print(f"Using {workers} worker processes.")
+        # total_tasks を設定
+        for task in all_simulation_tasks:
+            task["total_tasks"] = len(all_simulation_tasks)
 
-    success_count = 0
-    failure_count = 0
-    failed_tasks_info = []
+        print(f"Aggregated a total of {len(all_simulation_tasks)} simulation tasks for this run.")
 
-    with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor:
-        # タスクを投入
-        futures = [executor.submit(run_single_simulation_task, task) for task in all_simulation_tasks]
+        # --- シミュレーションタスクの並列実行 ---
+        print("\n" + "-" * 80)
+        print(f"Running Tasks for Run {run_num}")
+        print("-" * 80)
 
-        # 完了した順に結果を処理
-        for future in concurrent.futures.as_completed(futures):
-            try:
-                success, error_message = future.result()
-                if success:
-                    success_count += 1
-                else:
+        workers = MAX_WORKERS if MAX_WORKERS is not None else os.cpu_count()
+        print(f"Using {workers} worker processes.")
+
+        success_count = 0
+        failure_count = 0
+        failed_tasks_info = []
+
+        with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor:
+            # タスクを投入
+            futures = [executor.submit(run_single_simulation_task, task) for task in all_simulation_tasks]
+
+            # 完了した順に結果を処理
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    success, error_message = future.result()
+                    if success:
+                        success_count += 1
+                    else:
+                        failure_count += 1
+                        if error_message:
+                            failed_tasks_info.append(error_message)
+                except Exception as exc:
                     failure_count += 1
-                    if error_message:
-                        failed_tasks_info.append(error_message)
-            except Exception as exc:
-                failure_count += 1
-                error_info = f"An unexpected error occurred during task execution: {exc}"
-                print(error_info)
-                failed_tasks_info.append(error_info)
+                    error_info = f"An unexpected error occurred during task execution: {exc}"
+                    print(error_info)
+                    failed_tasks_info.append(error_info)
+
+        print("\n" + "-" * 80)
+        print(f"Run {run_num} Completed.")
+        print("-" * 80)
+        print(f"Total tasks: {len(all_simulation_tasks)}")
+        print(f"  Successful: {success_count}")
+        print(f"  Failed:     {failure_count}")
+        
+        if failed_tasks_info:
+            print("\n--- FAILED TASKS SUMMARY (Run {run_num}) ---")
+            for info in failed_tasks_info:
+                print(info)
+
+        print(f"\nSimulation results for run {run_num} saved in: {run_output_dir}")
 
     print("\n" + "=" * 80)
-    print("All Simulation Tasks Completed.")
-    print("=" * 80)
-    print(f"Total tasks: {len(all_simulation_tasks)}")
-    print(f"  Successful: {success_count}")
-    print(f"  Failed:     {failure_count}")
-    
-    if failed_tasks_info:
-        print("\n--- FAILED TASKS SUMMARY ---")
-        for info in failed_tasks_info:
-            print(info)
-
-    print(f"\nSimulation results saved in: {args.output_base_dir}")
+    print("All Simulation Runs Completed.")
     print("=" * 80)
 
 if __name__ == "__main__":
