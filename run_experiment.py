@@ -5,37 +5,27 @@ import sys
 import time
 import itertools
 import concurrent.futures
-import numpy as np # np.arange を使用するため
+import numpy as np
+import random
+import csv
 
 # --- グローバル設定 ---
-# 並列実行するプロセス数 (NoneにするとCPUのコア数が自動的に使われます)
-MAX_WORKERS = 4 
-
-# シミュレーションの基本パラメータ (nwsim.py に渡すもの)
+MAX_WORKERS = 18
 SIMULATION_BASE_PARAMS = {
     "packets": "1000",
     "max_sim_time": "inf",
     "ttl": "100.0",
     "buffer_size": "-1"
 }
-
-# ルーティング戦略の定義
-ROUTING_STRATEGIES = [
-    "dijkstra",
-    "reliable"
-]
-
-# 待機戦略とそのパラメータ範囲の定義 (run_all_topology_simulations.py から流用)
+ROUTING_STRATEGIES = ["dijkstra", "reliable"]
 STRATEGIES_WITH_PARAMS = {
     "dynamic_wait_strategy_with_faillink": ("dynamic_factor", np.arange(0.5, 3.1, 0.5)),
     "dynamic_wait_strategy_with_node_count": ("dynamic_factor", np.arange(0.5, 3.1, 0.5)),
     "ratio_based_wait_strategy": ("ratio_factor", np.arange(0.5, 3.1, 0.5)),
     "fixed_wait_duration_strategy": ("base_wait_time", np.arange(0.5, 5.1, 0.5)),
-    "no_wait_strategy": (None, [0]), # パラメータなし
-    "infinite_wait_strategy": (None, [0]), # パラメータなし
+    "no_wait_strategy": (None, [0]),
+    "infinite_wait_strategy": (None, [0]),
 }
-
-# 戦略名の短縮形 (ディレクトリ名・ファイル名用)
 STRATEGY_ABBREVIATIONS = {
     "dynamic_wait_strategy_with_faillink": "dynfail",
     "dynamic_wait_strategy_with_node_count": "dynnode",
@@ -44,8 +34,6 @@ STRATEGY_ABBREVIATIONS = {
     "no_wait_strategy": "nowait",
     "infinite_wait_strategy": "infwait",
 }
-
-# ルーティング戦略の短縮形
 ROUTING_STRATEGY_ABBREVIATIONS = {
     "dijkstra": "dijk",
     "reliable": "reli",
@@ -55,29 +43,19 @@ ROUTING_STRATEGY_ABBREVIATIONS = {
 def run_single_simulation_task(task_info):
     """
     単一のシミュレーションタスクを実行するワーカー関数。
-    ProcessPoolExecutorによって呼び出される。
     """
-    topo = task_info["topo"]
-    graph_idx = task_info["graph_idx"]
-    routing = task_info["routing"]
-    wait = task_info["wait"]
-    param_type = task_info["param_type"]
-    param_value = task_info["param_value"]
-    node_file = task_info["node_file"]
-    edge_file = task_info["edge_file"]
-    output_dir = task_info["output_dir"]
-    summary_filename = task_info["summary_filename"]
-    task_id = task_info["task_id"]
-    total_tasks = task_info["total_tasks"]
+    # Unpack all task info
+    for key, value in task_info.items():
+        globals()[key] = value
 
     start_time = time.time()
     
-    # nwsim.py を実行するコマンドをリストとして組み立て
     command = [
-        sys.executable,
-        "nwsim.py",
+        sys.executable, "nwsim.py",
         "--node_file", node_file,
         "--edge_file", edge_file,
+        "--src_node", str(src_node),
+        "--dst_node", str(dst_node),
         "--packets", SIMULATION_BASE_PARAMS["packets"],
         "--max_sim_time", SIMULATION_BASE_PARAMS["max_sim_time"],
         "--ttl", SIMULATION_BASE_PARAMS["ttl"],
@@ -88,27 +66,25 @@ def run_single_simulation_task(task_info):
         "--summary_filename", summary_filename
     ]
 
-    # 待機戦略のパラメータを追加
     if param_type:
         command.extend([f"--{param_type}", str(param_value)])
+    
+    # Pass through any other arguments
+    if unknown_args:
+        command.extend(unknown_args)
 
     try:
-        # コマンドを実行し、出力をキャプチャ
         result = subprocess.run(command, check=True, text=True, encoding='utf-8', capture_output=True)
         end_time = time.time()
         execution_time = end_time - start_time
-        print(f"[Task {task_id}/{total_tasks}] SUCCESS in {execution_time:.2f}s: {topo}/graph_{graph_idx}/{routing}/{wait}/{param_type}={param_value}")
+        print(f"[Task {task_id}] SUCCESS in {execution_time:.2f}s: {topo}/run_{run_idx}/{routing_abbr}/{wait_abbr}/p={param_value}")
         return True, None
     except subprocess.CalledProcessError as e:
         error_message = (
-            f"[Task {task_id}/{total_tasks}] FAILED: {topo}/graph_{graph_idx}/{routing}/{wait}/{param_type}={param_value}\n"
-            f"  Return Code: {e.returncode}\n"
+            f"[Task {task_id}] FAILED: {topo}/run_{run_idx}\n"
+            f"  CMD: {' '.join(command)}\n"
             f"  Output:\n{e.stdout}\n{e.stderr}\n"
         )
-        print(error_message)
-        return False, error_message
-    except FileNotFoundError:
-        error_message = f"Error: '{sys.executable}' command not found. Make sure Python is in your PATH."
         print(error_message)
         return False, error_message
     except Exception as e:
@@ -116,28 +92,17 @@ def run_single_simulation_task(task_info):
         print(error_message)
         return False, error_message
 
-
 def main():
-    # --- 引数の設定 ---
     parser = argparse.ArgumentParser(description="Run a full experiment by generating multiple graphs and running sweeps on them.")
-    
-    # このスクリプト自身が使用する引数
-    parser.add_argument("--num_graphs", type=int, required=True, help="Number of random graphs to generate for each topology.")
+    parser.add_argument("--num_runs", type=int, required=True, help="Number of random graphs to generate and simulate for each topology.")
     parser.add_argument("--topology_type", type=str, default="all", help="Topology type to generate. 'all' for every supported topology.")
     
-    # make_network_for_nwsim.py に渡すための引数 (unknown_argsとして取得)
     args, unknown_args = parser.parse_known_args()
 
     # --- トポロジの定義 ---
     all_supported_topologies = [
-        "random", 
-        "grid", 
-        "barabasi_albert", 
-        "path", 
-        "ring", 
-        "k_nearest_neighbor", 
-        "rgg", 
-        "multi_hub_star"
+        "random", "grid", "barabasi_albert", "path", "ring", 
+        "k_nearest_neighbor", "rgg", "multi_hub_star"
     ]
 
     if args.topology_type.lower() == 'all':
@@ -146,163 +111,121 @@ def main():
         target_topologies = [args.topology_type]
     else:
         print(f"Error: Unknown topology type '{args.topology_type}'.")
-        print(f"Available topologies: {', '.join(all_supported_topologies)}")
         sys.exit(1)
 
-    # --- ベースディレクトリの定義と作成 ---
-    BASE_GRAPH_DIR = "graph"
-    BASE_RESULT_DIR = "result"
-
-    os.makedirs(BASE_GRAPH_DIR, exist_ok=True)
-    os.makedirs(BASE_RESULT_DIR, exist_ok=True)
+    # --- ディレクトリ定義 ---
+    GRAPHS_BASE_DIR = "graph_data"
+    RESULTS_BASE_DIR = "result_data"
+    os.makedirs(GRAPHS_BASE_DIR, exist_ok=True)
+    os.makedirs(RESULTS_BASE_DIR, exist_ok=True)
     
-    print(f"Graph data will be saved in: {BASE_GRAPH_DIR}")
-    print(f"Simulation results will be saved in: {BASE_RESULT_DIR}")
-
     all_simulation_tasks = []
     task_counter = 0
 
-    # --- PHASE 1: グラフ生成とシミュレーションタスクの集約 ---
-    print("\n" + "=" * 80)
-    print("PHASE 1: Generating Graphs and Aggregating Simulation Tasks")
-    print("=" * 80)
+    # --- PHASE 1: グラフ生成 ---
+    print("="*80 + "\nPHASE 1: Generating Graphs\n" + "="*80)
 
     for topo in target_topologies:
-        print("\n" + "-" * 80)
-        print(f"Processing Topology: {topo}")
-        print("-" * 80)
-        
-        # トポロジごとのグラフ保存ディレクトリ
-        topo_graph_dir = os.path.join(BASE_GRAPH_DIR, topo)
-        os.makedirs(topo_graph_dir, exist_ok=True)
+        print(f"\n--- Processing Topology: {topo} ---")
+        for i in range(args.num_runs):
+            run_idx = i + 1
+            print(f"  Run {run_idx}/{args.num_runs} for {topo}")
+            
+            run_graph_dir = os.path.join(GRAPHS_BASE_DIR, topo, f"run_{run_idx}")
+            os.makedirs(run_graph_dir, exist_ok=True)
+            
+            node_path = os.path.join(run_graph_dir, "node.csv")
+            edge_path = os.path.join(run_graph_dir, "edge.csv")
+            diameter_path = os.path.join(run_graph_dir, "diameter_endpoints.csv")
+            
+            seed = random.randint(0, 99999)
 
-        for i in range(args.num_graphs):
-            print(f"  Generating Graph {i+1}/{args.num_graphs} for {topo}...")
-            
-            # グラフファイル保存用のユニークなディレクトリ
-            graph_instance_dir = os.path.join(topo_graph_dir, f"graph_{i}")
-            os.makedirs(graph_instance_dir, exist_ok=True)
-            
-            node_path = os.path.join(graph_instance_dir, "node.csv")
-            edge_path = os.path.join(graph_instance_dir, "edge.csv")
-            
-            # --- グラフ生成コマンドの組み立てと実行 ---
             make_cmd = [
-                sys.executable, "make_network_for_nwsim.py",
+                sys.executable, "make_network_degraded.py",
                 "--topology_type", topo,
                 "--node_output_path", node_path,
                 "--edge_output_path", edge_path,
-            ] + unknown_args # make_network_for_nwsim.py 向けの他の引数を追加
+                "--seed", str(seed),
+            ] + unknown_args
 
             try:
                 subprocess.run(make_cmd, check=True, text=True, encoding='utf-8', capture_output=True)
-                print(f"    Successfully generated graph files in: {graph_instance_dir}")
             except subprocess.CalledProcessError as e:
-                print(f"    ERROR: Graph generation failed for {topo}, graph {i}.")
-                print(f"      Command: {' '.join(e.cmd)}")
-                print(f"      Return Code: {e.returncode}")
-                print(f"      Output:\n{e.stdout}\n{e.stderr}")
-                continue # このグラフでのシミュレーションタスクは生成しない
-            except FileNotFoundError:
-                print("    ERROR: 'make_network_for_nwsim.py' not found. Make sure it's in the same directory.")
-                sys.exit(1)
+                print(f"    ERROR: Graph generation failed for {topo}, run {run_idx}.\n      CMD: {' '.join(e.cmd)}\n      Output:\n{e.stdout}\n{e.stderr}")
+                continue
 
-            # --- シミュレーションタスクの集約 ---
+            # --- タスク集約 ---
+            try:
+                with open(diameter_path, 'r') as f:
+                    reader = csv.DictReader(f)
+                    first_row = next(reader)
+                    src_node = int(first_row['node1'])
+                    dst_node = int(first_row['node2'])
+            except (FileNotFoundError, StopIteration):
+                print(f"  WARNING: Could not read diameter file for {topo}, run {run_idx}. Using default src=0, dst=-1.")
+                src_node, dst_node = 0, -1 
+
+            run_result_dir = os.path.join(RESULTS_BASE_DIR, topo, f"run_{run_idx}")
+
             for routing in ROUTING_STRATEGIES:
                 routing_abbr = ROUTING_STRATEGY_ABBREVIATIONS[routing]
-                
                 for wait_strategy_name, (param_type, param_values) in STRATEGIES_WITH_PARAMS.items():
                     wait_abbr = STRATEGY_ABBREVIATIONS[wait_strategy_name]
-
                     for param_value in param_values:
-                        # 結果保存ディレクトリのパスを組み立て
-                        result_output_dir = os.path.join(
-                            BASE_RESULT_DIR,
-                            topo,
-                            f"graph_{i}",
-                            routing_abbr,
-                            wait_abbr
-                        )
-                        os.makedirs(result_output_dir, exist_ok=True)
-
-                        # サマリーファイル名を組み立て (パラメータ値を含む)
-                        param_str = f"_p{param_value:.1f}" if param_type else ""
-                        summary_filename = f"summary_{routing_abbr}_{wait_abbr}{param_str}.csv"
-
+                        result_output_dir = os.path.join(run_result_dir, routing_abbr, wait_abbr)
+                        summary_filename = f"summary_p{param_value:.1f}.csv" if param_type else "summary.csv"
                         task_counter += 1
                         all_simulation_tasks.append({
-                            "topo": topo,
-                            "graph_idx": i,
-                            "routing": routing,
-                            "wait": wait_strategy_name,
-                            "param_type": param_type,
-                            "param_value": param_value,
-                            "node_file": node_path,
-                            "edge_file": edge_path,
-                            "output_dir": result_output_dir,
-                            "summary_filename": summary_filename,
-                            "task_id": task_counter,
-                            "total_tasks": None # 後で設定
+                            "topo": topo, "run_idx": run_idx, "routing": routing, "wait": wait_strategy_name,
+                            "param_type": param_type, "param_value": param_value, "node_file": node_path,
+                            "edge_file": edge_path, "src_node": src_node, "dst_node": dst_node,
+                            "output_dir": result_output_dir, "summary_filename": summary_filename,
+                            "task_id": task_counter, "total_tasks": None,
+                            "routing_abbr": routing_abbr, "wait_abbr": wait_abbr,
+                            "unknown_args": unknown_args
                         })
     
     if not all_simulation_tasks:
         print("No simulation tasks were generated. Exiting.")
         sys.exit(0)
 
-    # total_tasks を設定
     for task in all_simulation_tasks:
         task["total_tasks"] = len(all_simulation_tasks)
 
     print(f"\nAggregated a total of {len(all_simulation_tasks)} simulation tasks.")
 
     # --- PHASE 2: シミュレーションタスクの並列実行 ---
-    print("\n" + "=" * 80)
-    print("PHASE 2: Running All Simulation Tasks in Parallel")
-    print("=" * 80)
-
+    print("\n" + "="*80 + "\nPHASE 2: Running All Simulation Tasks in Parallel\n" + "="*80)
     workers = MAX_WORKERS if MAX_WORKERS is not None else os.cpu_count()
     print(f"Using {workers} worker processes.")
 
     success_count = 0
-    failure_count = 0
     failed_tasks_info = []
 
     with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor:
-        # タスクを投入
         futures = [executor.submit(run_single_simulation_task, task) for task in all_simulation_tasks]
-
-        # 完了した順に結果を処理
         for future in concurrent.futures.as_completed(futures):
             try:
                 success, error_message = future.result()
-                if success:
-                    success_count += 1
+                if success: success_count += 1
                 else:
-                    failure_count += 1
-                    if error_message:
-                        failed_tasks_info.append(error_message)
+                    failed_tasks_info.append(error_message)
             except Exception as exc:
-                failure_count += 1
-                error_info = f"An unexpected error occurred during task execution: {exc}"
-                print(error_info)
-                failed_tasks_info.append(error_info)
+                failed_tasks_info.append(f"A task generated an exception: {exc}")
 
-    print("\n" + "=" * 80)
-    print("All Simulation Tasks Completed.")
-    print("=" * 80)
+    print("\n" + "="*80 + "\nAll Simulation Tasks Completed.\n" + "="*80)
     print(f"Total tasks: {len(all_simulation_tasks)}")
     print(f"  Successful: {success_count}")
-    print(f"  Failed:     {failure_count}")
+    print(f"  Failed:     {len(failed_tasks_info)}")
     
     if failed_tasks_info:
         print("\n--- FAILED TASKS SUMMARY ---")
         for info in failed_tasks_info:
             print(info)
 
-    print(f"\nGraph data saved in: {BASE_GRAPH_DIR}")
-    print(f"Simulation results saved in: {BASE_RESULT_DIR}")
-    print("=" * 80)
-
+    print(f"\nGraph data saved in: {GRAPHS_BASE_DIR}")
+    print(f"Simulation results saved in: {RESULTS_BASE_DIR}")
+    print("="*80)
 
 if __name__ == "__main__":
     main()

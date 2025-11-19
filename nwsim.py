@@ -240,6 +240,9 @@ def _simulation_core_numba(
     dynamic_factor,
     ratio_factor,
     link_seed,
+    ideal_next_hop_table,
+    detour_penalty,
+    detour_penalty_randomization,
     routing_strategy_id,
 ):
     num_packets = len(packets_state)
@@ -394,6 +397,20 @@ def _simulation_core_numba(
                 heapq.heappush(event_queue, (current_time + 1e-5, 0, pid, 0.0))
                 continue
 
+            penalty = 1.0
+            if detour_penalty > 1.0:
+                ideal_next_hop = ideal_next_hop_table[present_node, dst_node]
+                if ideal_next_hop != -1 and next_hop != ideal_next_hop:
+                    if detour_penalty_randomization > 0.0:
+                        random_shift = (
+                            random_float() - 0.5
+                        ) * 2.0 * detour_penalty_randomization
+                        penalty = detour_penalty + random_shift
+                        if penalty < 0.0:
+                            penalty = 0.0
+                    else:
+                        penalty = detour_penalty
+
             u, v = present_node, next_hop
             if u > v:
                 u, v = v, u
@@ -409,7 +426,8 @@ def _simulation_core_numba(
                     and current_time >= edge[E_STATE_TRANSMITTING_UNTIL]
                 ):
                     node_buffer_counts[present_node] -= 1
-                    arrival_time = current_time + edge[E_STATE_WEIGHT]
+                    transmission_time = edge[E_STATE_WEIGHT] * penalty
+                    arrival_time = current_time + transmission_time
                     edges_state[edge_idx, E_STATE_TRANSMITTING_UNTIL] = arrival_time
                     heapq.heappush(event_queue, (arrival_time, 1, pid, float(next_hop)))
 
@@ -805,8 +823,27 @@ def simulate_network(args, strategy_id, ideal_graph, link_evaluation_data=None):
         return None, None, None, "."
     graph.build_adjacency_list_for_numba(link_evaluation_data)
 
+    max_node_id = max(graph.G.nodes()) if graph.G.nodes() else -1
+    ideal_next_hop_table = np.full(
+        (max_node_id + 1, max_node_id + 1), -1, dtype=np.int64
+    )
+    if args.detour_penalty > 1.0:
+        print("Pre-calculating ideal shortest paths for detour detection...")
+        all_ideal_paths = dict(nx.all_pairs_dijkstra_path(graph.G, weight="weight"))
+        for src_node in range(max_node_id + 1):
+            if src_node not in all_ideal_paths:
+                continue
+            for dst_node in range(max_node_id + 1):
+                if dst_node not in all_ideal_paths[src_node]:
+                    continue
+                path = all_ideal_paths[src_node][dst_node]
+                if len(path) > 1:
+                    ideal_next_hop_table[src_node, dst_node] = path[1]
+
     actual_dst_node = (
-        args.dst_node if args.dst_node is not None else (graph.G.number_of_nodes() - 1)
+        args.dst_node
+        if args.dst_node is not None
+        else (graph.G.number_of_nodes() - 1)
     )
 
     packets_list = generate_packets_for_state_array(
@@ -865,6 +902,9 @@ def simulate_network(args, strategy_id, ideal_graph, link_evaluation_data=None):
         args.dynamic_factor,
         args.ratio_factor,
         args.link_seed,
+        ideal_next_hop_table,
+        args.detour_penalty,
+        args.detour_penalty_randomization,
         routing_strategy_id,
     )
 
@@ -1057,6 +1097,18 @@ if __name__ == "__main__":
         type=float,
         default=1.0,
         help="Factor for ratio_based strategy.",
+    )
+    strategy_group.add_argument(
+        "--detour_penalty",
+        type=float,
+        default=1.0,
+        help="Penalty factor for transmission time on detours from the ideal shortest path. Default 1.0 (no penalty).",
+    )
+    strategy_group.add_argument(
+        "--detour_penalty_randomization",
+        type=float,
+        default=0.0,
+        help="Randomization range for detour penalty. The penalty will be a random value in [detour_penalty +/- this value].",
     )
 
     file_group.add_argument(
