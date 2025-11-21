@@ -69,9 +69,10 @@ def run_single_simulation_task(task_info):
     if param_type:
         command.extend([f"--{param_type}", str(param_value)])
     
-    # Pass through any other arguments
-    if unknown_args:
-        command.extend(unknown_args)
+    # We no longer pass unknown_args to nwsim.py as it can cause errors
+    # for arguments intended only for make_network_degraded.py (e.g., --degrade-edges).
+    # if unknown_args:
+    #     command.extend(unknown_args)
 
     try:
         result = subprocess.run(command, check=True, text=True, encoding='utf-8', capture_output=True)

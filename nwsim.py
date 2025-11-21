@@ -799,9 +799,7 @@ def run_link_evaluation_phase(args):
         reliability = (data["connected_time"] / total_time) if total_time > 0 else 0.5
         data["reliability_score"] = reliability
         original_weight = edge_list_for_eval[i]["weight"]
-        composite_cost = args.alpha * original_weight + (1 - args.alpha) * (
-            1 - reliability
-        )
+        composite_cost = (1 - reliability) # Changed to exclude original_weight
         data["composite_cost"] = composite_cost
 
     print("--- Link Evaluation Complete ---")
