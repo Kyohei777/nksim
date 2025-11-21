@@ -243,7 +243,7 @@ if __name__ == "__main__":
 
     # Step 4: Set Edge Attributes
     if args.degrade_edges and diameter_endpoints_to_export:
-        print("Degrading edge quality based on distance from diameter path...")
+        print("Degrading edge quality and weight based on distance from diameter path...")
         
         quality_levels = {
             0: {'c': 0.1, 'd': 0.9},
@@ -251,6 +251,14 @@ if __name__ == "__main__":
             2: {'c': 0.25, 'd': 0.55},
             3: {'c': 0.325, 'd': 0.375},
             4: {'c': 0.4, 'd': 0.2}
+        }
+        
+        WEIGHT_LEVELS = {
+            0: 0.5,
+            1: 1.375,
+            2: 2.25,
+            3: 3.125,
+            4: 4.0
         }
         
         ref_pair = diameter_endpoints_to_export[0]
@@ -278,15 +286,20 @@ if __name__ == "__main__":
             level = min(distances[u], distances[v])
             if level > 4: level = 4
             
+            # Set connect/disconnect rates
             base_q = quality_levels[level]
             connect_rate = base_q['c'] * random.uniform(0.8, 1.2)
             disconnect_rate = base_q['d'] * random.uniform(0.8, 1.2)
-
             if level == 4 and random.random() < 0.05:
                 connect_rate, disconnect_rate = 0.5, 0.1
-
             generated_graph[u][v]['connect_rate'] = round(connect_rate, 4)
             generated_graph[u][v]['disconnect_rate'] = round(disconnect_rate, 4)
+
+            # Set weight based on distance
+            base_weight = WEIGHT_LEVELS[level]
+            final_weight = base_weight * random.uniform(0.8, 1.2)
+            generated_graph[u][v]['weight'] = round(final_weight, 2)
+
     else:
         if args.degrade_edges:
             print("Warning: --degrade-edges specified, but no diameter path found. Using default rates.")

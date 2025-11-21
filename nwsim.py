@@ -624,12 +624,13 @@ class Graph:
                 lt = tuple(sorted((u, v)))
                 cc = link_evaluation_data.get(lt, {}).get("composite_cost", tc)
 
+            # ホップ数ベースの経路選択のため、dijkstra用のコストを常に1.0に設定
             adj_nodes_list[u].append(v)
-            adj_costs_time_list[u].append(tc)
+            adj_costs_time_list[u].append(1.0)
             adj_costs_reliable_list[u].append(cc)
 
             adj_nodes_list[v].append(u)
-            adj_costs_time_list[v].append(tc)
+            adj_costs_time_list[v].append(1.0)
             adj_costs_reliable_list[v].append(cc)
 
         for i in range(max_node_id + 1):
