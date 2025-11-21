@@ -107,8 +107,20 @@ def generate_graph_structure(
             G = nx.barabasi_albert_graph(num_nodes, barabasi_m, seed=seed)
         else:
             G = nx.complete_graph(num_nodes)
+    elif topology_type == "path":
+        G = nx.path_graph(num_nodes)
+    elif topology_type == "ring":
+        G = nx.cycle_graph(num_nodes)
+    elif topology_type == "k_nearest_neighbor":
+        k = max(2, k_neighbors // 2 * 2) # Ensure k is an even integer >= 2
+        if num_nodes > k:
+            G = nx.watts_strogatz_graph(num_nodes, k, 0, seed=seed)
+        else:
+            G = nx.complete_graph(num_nodes) # fallback for small n
+    elif topology_type == "rgg":
+        G = nx.random_geometric_graph(num_nodes, connection_radius, seed=seed)
     else:
-        print(f"Unknown topology type: {topology_type}. Defaulting to barabasi_albert.")
+        print(f"Warning: Unknown or unsupported topology_type '{topology_type}'. Defaulting to barabasi_albert.")
         G = nx.barabasi_albert_graph(num_nodes, 2, seed=seed)
 
     G.add_nodes_from([n['node_id'] for n in nodes_data])
@@ -171,6 +183,8 @@ if __name__ == "__main__":
     parser.add_argument("--edge_output_path", type=str, default="edge.csv", help="Path to save the edge CSV file.")
     parser.add_argument("--topology_type", type=str, default="barabasi_albert", help="Type of topology to generate.")
     parser.add_argument("--barabasi_m", type=int, default=2, help="Number of edges for Barabasi-Albert model.")
+    parser.add_argument("--k_neighbors", type=int, default=3, help="Number of nearest neighbors for k-nearest neighbor graph.")
+    parser.add_argument("--connection_radius", type=float, default=0.2, help="Connection radius for Random Geometric Graph (RGG).")
     parser.add_argument("--min_connect_rate", type=float, default=0.4, help="Default minimum connect rate.")
     parser.add_argument("--max_connect_rate", type=float, default=0.4, help="Default maximum connect rate.")
     parser.add_argument("--min_disconnect_rate", type=float, default=0.2, help="Default minimum disconnect rate.")
@@ -190,6 +204,8 @@ if __name__ == "__main__":
         num_nodes=args.num_nodes,
         topology_type=args.topology_type,
         barabasi_m=args.barabasi_m,
+        k_neighbors=args.k_neighbors,
+        connection_radius=args.connection_radius,
         min_weight=args.min_weight,
         max_weight=args.max_weight,
         seed=args.seed,

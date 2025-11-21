@@ -77,12 +77,12 @@ def run_single_simulation_task(task_info):
         result = subprocess.run(command, check=True, text=True, encoding='utf-8', capture_output=True)
         end_time = time.time()
         execution_time = end_time - start_time
-        print(f"[Task {task_id}] SUCCESS in {execution_time:.2f}s: {topo}/run_{run_idx}/{routing_abbr}/{wait_abbr}/p={param_value}")
+        print(f"[Task {task_id}] SUCCESS in {execution_time:.2f}s: {topo_str}/run_{run_idx}/{routing_abbr}/{wait_abbr}/p={param_value}")
         return True, None
     except subprocess.CalledProcessError as e:
         error_message = (
-            f"[Task {task_id}] FAILED: {topo}/run_{run_idx}\n"
-            f"  CMD: {' '.join(command)}\n"
+            f"[Task {task_id}] FAILED: {topo_str}/run_{run_idx}"
+            f"  CMD: {' '.join(command)}"
             f"  Output:\n{e.stdout}\n{e.stderr}\n"
         )
         print(error_message)
@@ -101,8 +101,14 @@ def main():
 
     # --- トポロジの定義 ---
     all_supported_topologies = [
-        "random", "grid", "barabasi_albert", "path", "ring", 
-        "k_nearest_neighbor", "rgg", "multi_hub_star"
+        "random", 
+        # "grid", 
+        "barabasi_albert", 
+        # "path", 
+        # "ring", 
+        "k_nearest_neighbor", 
+        "rgg", 
+        "multi_hub_star"
     ]
 
     if args.topology_type.lower() == 'all':
@@ -122,68 +128,100 @@ def main():
     all_simulation_tasks = []
     task_counter = 0
 
-    # --- PHASE 1: グラフ生成 ---
-    print("="*80 + "\nPHASE 1: Generating Graphs\n" + "="*80)
+    # --- トポロジごとの特別パラメータ設定 ---
+    topology_specific_params = {
+        "barabasi_albert": {"name": "barabasi_m", "values": [2, 3]},
+        "k_nearest_neighbor": {"name": "k_neighbors", "values": [2, 3]},
+    }
+
+    # --- PHASE 1: グラフ生成 & タスク集約 ---
+    print("="*80 + "\nPHASE 1: Generating Graphs & Aggregating Tasks\n" + "="*80)
 
     for topo in target_topologies:
-        print(f"\n--- Processing Topology: {topo} ---")
+        
+        # このトポロジで実行するパラメータセットを決定
+        params_to_run = [{}]  # デフォルトは追加パラメータなし
+        topo_param_config = topology_specific_params.get(topo)
+        
+        if topo_param_config:
+            param_name = topo_param_config["name"]
+            # コマンドライン引数でパラメータが指定されているか確認
+            is_param_in_args = any(f'--{param_name}' in arg for arg in unknown_args)
+            if not is_param_in_args:
+                params_to_run = [
+                    {"name": param_name, "value": v, "dir_suffix": f"_{param_name.replace('_','')}{v}"} 
+                    for v in topo_param_config["values"]
+                ]
+
         for i in range(args.num_runs):
             run_idx = i + 1
-            print(f"  Run {run_idx}/{args.num_runs} for {topo}")
             
-            run_graph_dir = os.path.join(GRAPHS_BASE_DIR, topo, f"run_{run_idx}")
-            os.makedirs(run_graph_dir, exist_ok=True)
-            
-            node_path = os.path.join(run_graph_dir, "node.csv")
-            edge_path = os.path.join(run_graph_dir, "edge.csv")
-            diameter_path = os.path.join(run_graph_dir, "diameter_endpoints.csv")
-            
-            seed = random.randint(0, 99999)
+            for param_set in params_to_run:
+                param_name = param_set.get("name")
+                param_value = param_set.get("value")
+                dir_suffix = param_set.get("dir_suffix", "")
+                topo_str = f"{topo}{dir_suffix}"
 
-            make_cmd = [
-                sys.executable, "make_network_degraded.py",
-                "--topology_type", topo,
-                "--node_output_path", node_path,
-                "--edge_output_path", edge_path,
-                "--seed", str(seed),
-            ] + unknown_args
+                print(f"\n--- Processing: {topo_str}, Run {run_idx}/{args.num_runs} ---")
+                
+                # --- グラフ生成 ---
+                run_graph_dir = os.path.join(GRAPHS_BASE_DIR, topo_str, f"run_{run_idx}")
+                os.makedirs(run_graph_dir, exist_ok=True)
+                
+                node_path = os.path.join(run_graph_dir, "node.csv")
+                edge_path = os.path.join(run_graph_dir, "edge.csv")
+                diameter_path = os.path.join(run_graph_dir, "diameter_endpoints.csv")
+                
+                seed = random.randint(0, 99999)
 
-            try:
-                subprocess.run(make_cmd, check=True, text=True, encoding='utf-8', capture_output=True)
-            except subprocess.CalledProcessError as e:
-                print(f"    ERROR: Graph generation failed for {topo}, run {run_idx}.\n      CMD: {' '.join(e.cmd)}\n      Output:\n{e.stdout}\n{e.stderr}")
-                continue
+                make_cmd = [
+                    sys.executable, "make_network_degraded.py",
+                    "--topology_type", topo,
+                    "--node_output_path", node_path,
+                    "--edge_output_path", edge_path,
+                    "--seed", str(seed),
+                ]
+                if param_name:
+                    make_cmd.extend([f"--{param_name}", str(param_value)])
+                
+                make_cmd.extend(unknown_args)
 
-            # --- タスク集約 ---
-            try:
-                with open(diameter_path, 'r') as f:
-                    reader = csv.DictReader(f)
-                    first_row = next(reader)
-                    src_node = int(first_row['node1'])
-                    dst_node = int(first_row['node2'])
-            except (FileNotFoundError, StopIteration):
-                print(f"  WARNING: Could not read diameter file for {topo}, run {run_idx}. Using default src=0, dst=-1.")
-                src_node, dst_node = 0, -1 
+                try:
+                    subprocess.run(make_cmd, check=True, text=True, encoding='utf-8', capture_output=True)
+                except subprocess.CalledProcessError as e:
+                    print(f"    ERROR: Graph generation failed for {topo_str}, run {run_idx}.\n      CMD: {' '.join(e.cmd)}\n      Output:\n{e.stdout}\n{e.stderr}")
+                    continue
 
-            run_result_dir = os.path.join(RESULTS_BASE_DIR, topo, f"run_{run_idx}")
+                # --- タスク集約 ---
+                try:
+                    with open(diameter_path, 'r') as f:
+                        reader = csv.DictReader(f)
+                        first_row = next(reader)
+                        src_node = int(first_row['node1'])
+                        dst_node = int(first_row['node2'])
+                except (FileNotFoundError, StopIteration):
+                    print(f"  WARNING: Could not read diameter file for {topo_str}, run {run_idx}. Using default src=0, dst=-1.")
+                    src_node, dst_node = 0, -1 
 
-            for routing in ROUTING_STRATEGIES:
-                routing_abbr = ROUTING_STRATEGY_ABBREVIATIONS[routing]
-                for wait_strategy_name, (param_type, param_values) in STRATEGIES_WITH_PARAMS.items():
-                    wait_abbr = STRATEGY_ABBREVIATIONS[wait_strategy_name]
-                    for param_value in param_values:
-                        result_output_dir = os.path.join(run_result_dir, routing_abbr, wait_abbr)
-                        summary_filename = f"summary_p{param_value:.1f}.csv" if param_type else "summary.csv"
-                        task_counter += 1
-                        all_simulation_tasks.append({
-                            "topo": topo, "run_idx": run_idx, "routing": routing, "wait": wait_strategy_name,
-                            "param_type": param_type, "param_value": param_value, "node_file": node_path,
-                            "edge_file": edge_path, "src_node": src_node, "dst_node": dst_node,
-                            "output_dir": result_output_dir, "summary_filename": summary_filename,
-                            "task_id": task_counter, "total_tasks": None,
-                            "routing_abbr": routing_abbr, "wait_abbr": wait_abbr,
-                            "unknown_args": unknown_args
-                        })
+                run_result_dir = os.path.join(RESULTS_BASE_DIR, topo_str, f"run_{run_idx}")
+
+                for routing in ROUTING_STRATEGIES:
+                    routing_abbr = ROUTING_STRATEGY_ABBREVIATIONS[routing]
+                    for wait_strategy_name, (sim_param_type, sim_param_values) in STRATEGIES_WITH_PARAMS.items():
+                        wait_abbr = STRATEGY_ABBREVIATIONS[wait_strategy_name]
+                        for sim_param_value in sim_param_values:
+                            result_output_dir = os.path.join(run_result_dir, routing_abbr, wait_abbr)
+                            summary_filename = f"summary_p{sim_param_value:.1f}.csv" if sim_param_type else "summary.csv"
+                            task_counter += 1
+                            all_simulation_tasks.append({
+                                "topo_str": topo_str, "run_idx": run_idx, "routing": routing, "wait": wait_strategy_name,
+                                "param_type": sim_param_type, "param_value": sim_param_value, "node_file": node_path,
+                                "edge_file": edge_path, "src_node": src_node, "dst_node": dst_node,
+                                "output_dir": result_output_dir, "summary_filename": summary_filename,
+                                "task_id": task_counter, "total_tasks": None,
+                                "routing_abbr": routing_abbr, "wait_abbr": wait_abbr,
+                                "unknown_args": unknown_args
+                            })
     
     if not all_simulation_tasks:
         print("No simulation tasks were generated. Exiting.")
